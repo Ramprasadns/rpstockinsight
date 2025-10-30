@@ -1,0 +1,9 @@
+{
+  "project_name": "RPStockInsight",
+  "admins": [
+    "admin@example.com"
+  ],
+  "testing_mode": true,
+  "default_period": "6mo",
+  "default_interval": "1d"
+}

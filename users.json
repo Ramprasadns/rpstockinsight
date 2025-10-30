@@ -1,0 +1,9 @@
+{
+  "superadmin": {
+    "salt": "initialsalt",
+    "password": "d83ff2602344289ae233192ca5fb97fd8727559c321c0e10b83ba39807fb137e",
+    "role": "superadmin",
+    "created": "2025-10-30T13:12:58.683311",
+    "portfolio": []
+  }
+}
