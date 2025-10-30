@@ -1,9 +1,17 @@
 {
-  "project_name": "RPStockInsight",
-  "admins": [
-    "admin@example.com"
+  "auto_refresh_seconds": 60,
+  "nse_symbols": [
+    "TCS.NS",
+    "INFY.NS",
+    "RELIANCE.NS",
+    "HDFCBANK.NS",
+    "ICICIBANK.NS"
   ],
-  "testing_mode": true,
-  "default_period": "6mo",
-  "default_interval": "1d"
+  "bse_symbols": [
+    "SBIN.BO",
+    "TATASTEEL.BO",
+    "ITC.BO",
+    "BAJFINANCE.BO",
+    "HINDUNILVR.BO"
+  ]
 }
