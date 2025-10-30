@@ -6,21 +6,16 @@ import plotly.graph_objs as go
 from sklearn.linear_model import LinearRegression
 import json
 import os
-import time
-import datetime
+import matplotlib.pyplot as plt
 
-# ------------------------------
-# Basic Config
-# ------------------------------
-st.set_page_config(page_title="RPStockInsight", layout="wide", initial_sidebar_state="expanded")
+# -----------------------------------------------------------------------------
+# Page Config
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="RPStockInsight", layout="wide")
 
-# Auto-refresh every 60 seconds
-st_autorefresh = st.experimental_rerun if not hasattr(st, "autorefresh") else st.autorefresh
-st_autorefresh(interval=60000, key="data_refresh")
-
-# ------------------------------
-# Load Admin Info (local only)
-# ------------------------------
+# -----------------------------------------------------------------------------
+# Admin Setup (Local only)
+# -----------------------------------------------------------------------------
 USER_FILE = "users.json"
 if not os.path.exists(USER_FILE):
     with open(USER_FILE, "w") as f:
@@ -29,26 +24,26 @@ if not os.path.exists(USER_FILE):
 with open(USER_FILE, "r") as f:
     users = json.load(f)
 
-# ------------------------------
+# -----------------------------------------------------------------------------
 # Header
-# ------------------------------
+# -----------------------------------------------------------------------------
 st.markdown("""
 # 📊 RPStockInsight  
-**Mobile-friendly · Auto light/dark theme · Live auto-refresh (every 60s)**  
+**Mobile-friendly · Auto light/dark theme · Live ticker (auto-refresh every 60s)**
 """)
 
-# ------------------------------
+# -----------------------------------------------------------------------------
 # Sidebar Controls
-# ------------------------------
+# -----------------------------------------------------------------------------
 st.sidebar.header("Dashboard Settings")
 
 symbol = st.sidebar.text_input("Enter Stock Symbol (NSE/BSE) e.g. TCS.NS or INFY.NS", "TCS.NS")
 period = st.sidebar.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
 interval = st.sidebar.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
 
-# ------------------------------
-# Admin Login Section
-# ------------------------------
+# -----------------------------------------------------------------------------
+# Admin Login
+# -----------------------------------------------------------------------------
 st.sidebar.subheader("Admin area (local test/auth)")
 
 if "logged_in" not in st.session_state:
@@ -75,55 +70,82 @@ elif admin_choice == "Login":
         else:
             st.sidebar.error("❌ Invalid credentials")
 
-# ------------------------------
-# Live Market Index Ticker
-# ------------------------------
-def pinned_ticker_html(index_label="NIFTY 50", index_symbol="^NSEI"):
+# -----------------------------------------------------------------------------
+# Auto-refresh every 60s
+# -----------------------------------------------------------------------------
+st.markdown("<meta http-equiv='refresh' content='60'>", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# Live Marquee Ticker (scrolling banner)
+# -----------------------------------------------------------------------------
+def get_index_ticker(label, symbol):
     try:
-        ticker = yf.Ticker(index_symbol)
+        ticker = yf.Ticker(symbol)
         data = ticker.history(period="1d", interval="1m")
-
         if data.empty:
-            return f"<span style='color:gray;'>No data for {index_label}</span>"
-
-        price = float(data['Close'][-1])
-        prev = float(data['Close'][-2])
-        pct = ((price - prev) / prev * 100) if prev != 0 else 0.0
-
-        color = "green" if pct >= 0 else "red"
+            return f"{label}: No data"
+        price = data["Close"].iloc[-1]
+        prev = data["Close"].iloc[-2] if len(data) > 1 else price
+        pct = ((price - prev) / prev) * 100 if prev != 0 else 0
         arrow = "▲" if pct >= 0 else "▼"
+        color = "limegreen" if pct >= 0 else "tomato"
+        return f"<b>{label}</b>: {price:,.2f} <span style='color:{color}'>{arrow} {pct:.2f}%</span>"
+    except:
+        return f"{label}: Error"
 
-        return f"<b>{index_label}</b>: {price:,.2f} <span style='color:{color};'>{arrow} {pct:.2f}%</span>"
-    except Exception as e:
-        return f"<span style='color:red;'>⚠️ Error fetching data: {e}</span>"
+# Combine multiple tickers
+indexes = [
+    ("NIFTY 50", "^NSEI"),
+    ("SENSEX", "^BSESN"),
+    ("BANK NIFTY", "^NSEBANK")
+]
 
-# ------------------------------
-# Display Ticker (auto-refresh)
-# ------------------------------
-ticker_placeholder = st.empty()
-index_html = pinned_ticker_html("NIFTY", "^NSEI")
-ticker_placeholder.markdown(f"<div style='font-size:18px;text-align:center;padding:6px;'>{index_html}</div>", unsafe_allow_html=True)
+ticker_html = " | ".join([get_index_ticker(name, sym) for name, sym in indexes])
 
-# ------------------------------
+st.markdown(f"""
+<style>
+.marquee {{
+  white-space: nowrap;
+  overflow: hidden;
+  box-sizing: border-box;
+  animation: marquee 25s linear infinite;
+  font-size: 18px;
+  font-weight: 500;
+  color: white;
+  padding: 10px;
+  background-color: #111;
+  border-radius: 5px;
+}}
+@keyframes marquee {{
+  0%   {{ text-indent: 100% }}
+  100% {{ text-indent: -100% }}
+}}
+</style>
+<div class="marquee">{ticker_html}</div>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
 # Fetch Stock Data
-# ------------------------------
+# -----------------------------------------------------------------------------
 try:
     df = yf.download(symbol, period=period, interval=interval)
     if df.empty:
-        st.warning("⚠️ No data found. Please check the stock symbol or period.")
+        st.warning("⚠️ No data found. Please check the symbol or period.")
     else:
         st.subheader(f"📈 {symbol} Stock Chart")
         fig = go.Figure(data=[go.Candlestick(x=df.index,
-                                             open=df['Open'], high=df['High'],
-                                             low=df['Low'], close=df['Close'])])
-        fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark", height=450)
+                                             open=df['Open'],
+                                             high=df['High'],
+                                             low=df['Low'],
+                                             close=df['Close'])])
+        fig.update_layout(xaxis_rangeslider_visible=False, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
 except Exception as e:
     st.error(f"❌ Error fetching stock data: {e}")
 
-# ------------------------------
-# Short-Term & Long-Term Predictions
-# ------------------------------
+# -----------------------------------------------------------------------------
+# Stock Predictions
+# -----------------------------------------------------------------------------
 st.header("🔮 Stock Predictions")
 
 try:
@@ -134,21 +156,22 @@ try:
 
     model = LinearRegression()
     model.fit(X, y)
-
     next_30 = model.predict([[len(df) + 30]])[0]
-    st.success(f"Predicted price in 30 days ≈ ₹{next_30:,.2f}")
+    next_90 = model.predict([[len(df) + 90]])[0]
+
+    st.success(f"📆 Predicted price in 30 days ≈ ₹{next_30:,.2f}")
+    st.info(f"🧭 Predicted price in 90 days ≈ ₹{next_90:,.2f}")
 except Exception as e:
     st.warning(f"⚠️ Prediction error: {e}")
 
-# ------------------------------
+# -----------------------------------------------------------------------------
 # Breakout Detection
-# ------------------------------
+# -----------------------------------------------------------------------------
 st.header("🚀 Breakout Detection")
 try:
     recent = df["Close"].tail(10)
     avg = recent.mean()
     last = recent.iloc[-1]
-
     if last > 1.05 * avg:
         st.success("🚀 Potential Breakout Detected! Price above recent average.")
     elif last < 0.95 * avg:
@@ -158,19 +181,19 @@ try:
 except Exception as e:
     st.error(f"⚠️ Error analyzing breakout: {e}")
 
-# ------------------------------
-# Sector-wise Insights (placeholder)
-# ------------------------------
+# -----------------------------------------------------------------------------
+# Sector Insights (Placeholder)
+# -----------------------------------------------------------------------------
 st.header("🧭 Sector Insights")
-st.info("Sector-wise analysis coming soon... (Beta)")
+st.info("Sector-wise analysis coming soon… (Beta)")
 
-# ------------------------------
+# -----------------------------------------------------------------------------
 # Footer
-# ------------------------------
+# -----------------------------------------------------------------------------
 st.markdown("---")
 st.markdown(f"""
-<div style='text-align:center; font-size:14px;'>
+<div style='text-align:center;font-size:14px;'>
 © 2025 RPStockInsight · Built with ❤️ using Streamlit  
-<br>Auto-refreshed at {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+<br>Updated on {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}
 </div>
 """, unsafe_allow_html=True)
