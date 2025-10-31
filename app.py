@@ -11,21 +11,27 @@ st.caption("Live NSE/BSE Insights • Breakout Suggestions • Auto Light/Dark M
 
 CONFIG_FILE = "config.json"
 
-# Load config
+# Load config safely
 try:
     with open(CONFIG_FILE, "r") as f:
         config = json.load(f)
-except FileNotFoundError:
+        if "tickers" not in config:
+            config["tickers"] = []
+except (FileNotFoundError, json.JSONDecodeError):
     config = {"tickers": []}
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
 
-# Load users
+# Load users safely
 try:
     with open("users.json", "r") as f:
         users = json.load(f)
 except FileNotFoundError:
     users = {"superadmin": {"password": "SuperAdmin@123", "role": "superadmin"}}
+    with open("users.json", "w") as f:
+        json.dump(users, f, indent=4)
 
-default_tickers = [t["symbol"] for t in config.get("tickers", [])]
+default_tickers = [t["symbol"] for t in config["tickers"]] if config["tickers"] else ["TCS.NS", "INFY.NS", "RELIANCE.NS"]
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
@@ -35,7 +41,7 @@ with st.sidebar:
     interval = st.selectbox("Select Interval", ["1d", "1h", "15m", "5m"], index=0)
     st.markdown("---")
 
-    st.subheader("🔐 Admin Area (local auth)")
+    st.subheader("🔐 Admin Area")
     username = st.text_input("Username", "superadmin")
     password = st.text_input("Password", type="password")
     login_btn = st.button("Login")
@@ -50,7 +56,7 @@ if login_btn:
         st.sidebar.error("❌ Invalid credentials")
 
 # ---------------- LIVE TICKER SECTION ----------------
-st.subheader("📈 Live Tickers")
+st.subheader("📈 Live Market Tickers")
 ticker_container = st.empty()
 
 
@@ -91,7 +97,7 @@ st.subheader("🚀 Breakout Suggestions")
 st.caption("Top potential breakouts by sector (short-term & long-term targets)")
 
 breakout_data = []
-for t in config.get("tickers", []):
+for t in config["tickers"]:
     try:
         df = yf.download(t["symbol"], period="3mo", interval="1d", progress=False)
         if not df.empty:
@@ -110,7 +116,7 @@ for t in config.get("tickers", []):
         pass
 
 if breakout_data:
-    st.dataframe(pd.DataFrame(breakout_data), use_container_width=True)
+    st.dataframe(pd.DataFrame(breakout_data), width='stretch')
 else:
     st.info("No breakout signals found currently.")
 
@@ -119,7 +125,7 @@ st.subheader(f"📊 Stock Summary for {selected_symbol}")
 try:
     df = yf.download(selected_symbol, period=period, interval=interval)
     if not df.empty:
-        st.line_chart(df["Close"], use_container_width=True)
+        st.line_chart(df["Close"], width='stretch')
         st.metric(label="Latest Price", value=f"₹{df['Close'].iloc[-1]:.2f}")
     else:
         st.warning("No data available for the selected symbol.")
@@ -129,11 +135,14 @@ except Exception as e:
 # ---------------- ADMIN PANEL ----------------
 if logged_in and users[username]["role"] == "superadmin":
     st.markdown("---")
-    st.header("🛠 Manage Tickers (Admin Only)")
+    st.header("🛠 Manage Tickers (Super Admin Only)")
 
     st.subheader("Current Tickers")
-    tick_df = pd.DataFrame(config.get("tickers", []))
-    st.dataframe(tick_df, use_container_width=True)
+    tick_df = pd.DataFrame(config["tickers"])
+    if not tick_df.empty:
+        st.dataframe(tick_df, width='stretch')
+    else:
+        st.info("No tickers configured yet.")
 
     st.subheader("➕ Add New Ticker")
     new_name = st.text_input("Company Name")
@@ -149,13 +158,14 @@ if logged_in and users[username]["role"] == "superadmin":
             st.error("Please enter both name and symbol.")
 
     st.subheader("❌ Remove Ticker")
-    all_symbols = [t["symbol"] for t in config.get("tickers", [])]
-    remove_choice = st.selectbox("Select Ticker to Remove", all_symbols)
-    if st.button("Remove Ticker"):
-        config["tickers"] = [t for t in config["tickers"] if t["symbol"] != remove_choice]
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
-        st.warning(f"Removed {remove_choice} from config.")
+    all_symbols = [t["symbol"] for t in config["tickers"]]
+    if all_symbols:
+        remove_choice = st.selectbox("Select Ticker to Remove", all_symbols)
+        if st.button("Remove Ticker"):
+            config["tickers"] = [t for t in config["tickers"] if t["symbol"] != remove_choice]
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config, f, indent=4)
+            st.warning(f"Removed {remove_choice} from config.")
 
 # ---------------- FOOTER ----------------
 st.markdown("---")
