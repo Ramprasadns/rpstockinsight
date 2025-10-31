@@ -1,6 +1,6 @@
 {
   "superadmin": {
-    "password": "rp@2025",
-    "role": "super_admin"
+    "password": "SuperAdmin@123",
+    "role": "superadmin"
   }
 }
