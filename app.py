@@ -66,9 +66,9 @@ def get_live_prices(symbols):
         try:
             data = yf.Ticker(sym).history(period="1d")
             if not data.empty:
-                price = data["Close"].iloc[-1]
-                change = data["Close"].pct_change().iloc[-1] * 100
-                prices[sym] = (price, change)
+                close_val = float(data["Close"].iloc[-1])
+                change = float(data["Close"].pct_change().iloc[-1] * 100)
+                prices[sym] = (close_val, change)
         except Exception:
             prices[sym] = (None, None)
     return prices
@@ -79,7 +79,7 @@ def display_scrolling_ticker(prices):
         st.warning("No ticker data available.")
         return
     ticker_text = " | ".join(
-        [f"{sym}: ₹{v[0]:.2f} ({v[1]:+.2f}%)" for sym, v in prices.items() if v[0]]
+        [f"{sym}: ₹{v[0]:.2f} ({v[1]:+.2f}%)" for sym, v in prices.items() if v[0] is not None]
     )
     ticker_html = f"""
     <marquee scrollamount="5" behavior="scroll" direction="left" style="font-size:18px; color:limegreen;">
@@ -101,8 +101,8 @@ for t in config["tickers"]:
     try:
         df = yf.download(t["symbol"], period="3mo", interval="1d", progress=False)
         if not df.empty:
-            last = df["Close"].iloc[-1]
-            ma20 = df["Close"].rolling(20).mean().iloc[-1]
+            last = float(df["Close"].iloc[-1])
+            ma20 = float(df["Close"].rolling(20).mean().iloc[-1])
             if last > ma20 * 1.03:  # breakout signal
                 breakout_data.append({
                     "Stock": t["name"],
@@ -125,8 +125,10 @@ st.subheader(f"📊 Stock Summary for {selected_symbol}")
 try:
     df = yf.download(selected_symbol, period=period, interval=interval)
     if not df.empty:
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        last_price = float(df["Close"].iloc[-1])
         st.line_chart(df["Close"], width='stretch')
-        st.metric(label="Latest Price", value=f"₹{df['Close'].iloc[-1]:.2f}")
+        st.metric(label="Latest Price", value=f"₹{last_price:.2f}")
     else:
         st.warning("No data available for the selected symbol.")
 except Exception as e:
