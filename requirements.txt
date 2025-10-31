@@ -1,8 +1,7 @@
-streamlit
+streamlit>=1.24
 yfinance
 pandas
 numpy
 plotly
-requests
 scikit-learn
-matplotlib
+streamlit-autorefresh
