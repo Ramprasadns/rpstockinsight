@@ -1,32 +1,38 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import time
-import random
-from datetime import datetime, timedelta
 import json
+from datetime import datetime
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="RPStockInsight", layout="wide")
 st.title("📊 RPStockInsight")
-st.caption("Live NSE/BSE insights • Breakout suggestions • Auto light/dark mode")
+st.caption("Live NSE/BSE insights • Breakout suggestions • Auto light/dark mode • Editable tickers")
 
-# Load tickers config
-with open("config.json", "r") as f:
-    config = json.load(f)
+CONFIG_FILE = "config.json"
 
+def load_config():
+    with open(CONFIG_FILE, "r") as f:
+        return json.load(f)
+
+def save_config(cfg):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=4)
+
+config = load_config()
 default_tickers = [t["symbol"] for t in config.get("tickers", [])]
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("⚙️ Dashboard Settings")
     selected_symbol = st.text_input("Enter Stock Symbol (e.g., TCS.NS, INFY.NS)", value="TCS.NS")
-    period = st.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=1)
-    interval = st.selectbox("Select Interval", ["1d", "1h", "15m", "5m"], index=0)
+    period = st.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=1)
+    interval = st.selectbox("Select Interval", ["1d", "1h", "15m"], index=0)
+
     st.markdown("---")
-    st.subheader("🧭 Admin Area (local auth only)")
-    st.info("Local authentication. Change in users.json for production.")
-    admin_action = st.radio("Admin Action", ["Login", "Register"], horizontal=True)
+    st.subheader("🧭 Admin Area")
+    st.info("Local edit panel for tickers (saved in config.json)")
+    admin_mode = st.checkbox("Enable Admin Edit Mode", False)
 
 # ---------------- LIVE TICKER SECTION ----------------
 st.subheader("📈 Live Tickers")
@@ -45,7 +51,6 @@ def get_live_prices(symbols):
             prices[sym] = (None, None)
     return prices
 
-# Animate ticker scroll
 def display_scrolling_ticker(prices):
     if not prices:
         st.warning("No ticker data available.")
@@ -64,11 +69,10 @@ prices = get_live_prices(default_tickers)
 display_scrolling_ticker(prices)
 
 # ---------------- BREAKOUT SUGGESTIONS ----------------
-st.subheader("🚀 Breakout Suggestions")
-st.caption("Top potential breakouts by sector (short-term & long-term targets)")
+st.subheader("🚀 Breakout Suggestions (Top Stocks by Sector)")
+st.caption("Short-term and Long-term price targets")
 
 breakout_data = []
-
 for t in config["tickers"]:
     try:
         df = yf.download(t["symbol"], period="3mo", interval="1d", progress=False)
@@ -103,6 +107,37 @@ try:
 except Exception as e:
     st.error(f"Error fetching data: {e}")
 
+# ---------------- ADMIN: TICKER MANAGEMENT ----------------
+if admin_mode:
+    st.markdown("---")
+    st.subheader("🧩 Manage Tickers")
+
+    with st.expander("➕ Add New Ticker"):
+        name = st.text_input("Company Name")
+        symbol = st.text_input("Symbol (e.g., TCS.NS)")
+        sector = st.text_input("Sector")
+        if st.button("Add Ticker"):
+            if name and symbol:
+                config["tickers"].append({
+                    "name": name.strip(),
+                    "symbol": symbol.strip(),
+                    "sector": sector.strip() or "General"
+                })
+                save_config(config)
+                st.success(f"Added {symbol}")
+                st.experimental_rerun()
+
+    with st.expander("🗑️ Remove Ticker"):
+        symbols = [t["symbol"] for t in config["tickers"]]
+        to_remove = st.selectbox("Select ticker to remove", symbols)
+        if st.button("Remove Selected"):
+            config["tickers"] = [t for t in config["tickers"] if t["symbol"] != to_remove]
+            save_config(config)
+            st.warning(f"Removed {to_remove}")
+            st.experimental_rerun()
+
+    st.caption("Changes are auto-saved to config.json")
+
 # ---------------- FOOTER ----------------
 st.markdown("---")
-st.caption("© 2025 RPStockInsight | Data: Yahoo Finance | For educational use only.")
+st.caption("© 2025 RPStockInsight | Data from Yahoo Finance | For educational use only.")
