@@ -1,483 +1,472 @@
 """
-RPStockInsight - final app.py (single-file Streamlit app)
-
+RPStockInsight - final app.py (v2.6)
 Features:
-- Pinned live ticker area (NSE & BSE) — small font, auto-refresh via caching TTL=60s
-- CSV upload to fetch many tickers (use column 'SYMBOL' with ticker like 'TCS.NS' or 'RELIANCE.NS', '500112.BO' (example BSE format))
-- Built-in simple breakout detection + entry/stop/target suggestion
-- Short-term and long-term simple predictions based on linear regression on closes (small, illustrative)
-- Local auth with roles: superadmin, admin, user (default credentials in users.json; change ASAP)
-- Mobile-friendly layout
-- Caching to avoid excessive repeated fetches (ttl=60 seconds)
-- Instructions: update requirements.txt with: streamlit, yfinance, pandas, numpy
-- NOTE: For production use Streamlit Cloud secrets for real credentials (do NOT commit secrets)
-
-How to use:
-- Place this file in your repo root as app.py
-- requirements.txt must include: streamlit, yfinance, pandas, numpy
-- Deploy to Streamlit Cloud or run locally with `streamlit run app.py`
-- To load "all tickers": upload CSV (column SYMBOL). For very large lists, upload and let it run in batches.
+ - Pinned NSE/BSE tickers (auto-refresh via cache TTL=60s)
+ - Built-in tickers list (creates tickers.csv on first run)
+ - Sidebar to add/remove/save tickers (persists to tickers.csv)
+ - Breakout detection by sector (top 5-10 suggestions)
+ - Simple short/long predictions (LinearRegression)
+ - Local auth (users.json) with roles: superadmin/admin/user
+ - Robust error handling for yfinance issues
 """
 
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import io
 import json
+from datetime import datetime
+from io import StringIO
 
-# ---------------------------
-# CONFIG / DEFAULTS
-# ---------------------------
+# ---------- CONFIG --------------
 APP_TITLE = "RPStockInsight"
-TICKER_REFRESH_SECONDS = 60  # cache TTL (behaves like auto-refresh)
-DEFAULT_SAMPLE_TICKERS = [
-    "NSEI.NS",  # NIFTY index if you want (yfinance uses ^NSEI sometimes); using NSEI.NS may return symbol-specific
-    "TCS.NS",
-    "INFY.NS",
-    "RELIANCE.NS",
-    "HDFC.NS",
-    "ICICIBANK.NS",
-    "SBIN.NS",
-    "LT.NS"
-]
-# Default local users (change these immediately after deploying)
-# Roles: superadmin, admin, user
+CACHE_TTL = 60  # seconds for fetch caching (auto-refresh)
+TICKERS_FILE = "tickers.csv"
+USERS_FILE = "users.json"
+# Default users (first-run). Change passwords immediately after deploy.
 DEFAULT_USERS = {
     "superadmin": {"password": "SuperAdmin@123", "role": "superadmin"},
     "admin": {"password": "Admin@123", "role": "admin"},
     "tester": {"password": "Test@123", "role": "user"}
 }
 
-# ---------------------------
-# Utility functions
-# ---------------------------
-@st.cache_data(ttl=TICKER_REFRESH_SECONDS)
-def fetch_ticker_data(tickers, period="1mo", interval="1d"):
-    """
-    Fetch historical data (close/open/high/low/volume) for a list of tickers using yfinance.
-    Returns dict: ticker -> dataframe
-    Caching TTL ensures auto-refresh behavior.
-    """
-    out = {}
-    # Use yfinance's download for batched fetching when list is not too large
-    tickers_list = list(tickers)
-    # yfinance supports batch download; but returns a multi-index DataFrame if >1 ticker
+# Embedded starter ticker list (symbol, sector). This will be written to tickers.csv on first run.
+DEFAULT_TICKERS = [
+    ("RELIANCE.NS","Oil & Gas - Refining & Marketing"),
+    ("HDFCBANK.NS","Private Banks"),
+    ("BHARTIARTL.NS","Telecom Services"),
+    ("TCS.NS","IT Services & Consulting"),
+    ("ICICIBANK.NS","Private Banks"),
+    ("SBIN.NS","Public Banks"),
+    ("BAJFINANCE.NS","Consumer Finance"),
+    ("INFY.NS","IT Services & Consulting"),
+    ("HINDUNILVR.NS","FMCG - Household Products"),
+    ("LICI.NS","Insurance"),
+    ("LT.NS","Construction & Engineering"),
+    ("ITC.NS","FMCG - Tobacco"),
+    ("MARUTI.NS","Four Wheelers"),
+    ("KOTAKBANK.NS","Private Banks"),
+    ("M&M.NS","Four Wheelers"),
+    ("HCLTECH.NS","IT Services & Consulting"),
+    ("SUNPHARMA.NS","Pharmaceuticals"),
+    ("AXISBANK.NS","Private Banks"),
+    ("ULTRACEMCO.NS","Cement"),
+    ("BAJAJFINSV.NS","Insurance"),
+    ("TITAN.NS","Precious Metals, Jewellery & Watches"),
+    ("ONGC.NS","Oil & Gas - Exploration & Production"),
+    ("ADANIPORTS.NS","Ports"),
+    ("HAL.NS","Aerospace & Defense Equipments"),
+    ("BEL.NS","Electronic Equipments"),
+    ("JSWSTEEL.NS","Iron & Steel"),
+    ("POWERGRID.NS","Power Transmission & Distribution"),
+    ("DMART.NS","Retail - Department Stores"),
+    ("WIPRO.NS","IT Services & Consulting"),
+    ("BAJAJ-AUTO.NS","Two Wheelers"),
+    ("NESTLEIND.NS","FMCG - Foods"),
+    ("ASIANPAINT.NS","Paints"),
+    ("COALINDIA.NS","Mining - Coal"),
+    ("IOC.NS","Oil & Gas - Refining & Marketing"),
+    ("TATASTEEL.NS","Iron & Steel"),
+    ("INDIGO.NS","Airlines"),
+    ("HINDZINC.NS","Mining - Diversified"),
+    ("GRASIM.NS","Cement"),
+    ("VEDL.NS","Metals - Diversified"),
+    ("SBILIFE.NS","Insurance"),
+    ("JIOFINANCE.NS","Consumer Finance"),
+    ("HYUNDAI.NS","Four Wheelers"),
+    ("HINDALCO.NS","Metals - Aluminium"),
+    ("DLF.NS","Real Estate"),
+    ("EICHERMOT.NS","Trucks & Buses"),
+    ("DIVISLAB.NS","Labs & Life Sciences Services"),
+    ("LTIMINDTREE.NS","IT Services & Consulting"),
+    ("TVSMOTOR.NS","Two Wheelers"),
+    ("VBL.NS","Soft Drinks"),
+    ("IRFC.NS","Specialized Finance"),
+    ("HDFCLIFE.NS","Insurance"),
+    ("BPCL.NS","Oil & Gas - Refining & Marketing"),
+    ("PIDILITIND.NS","Diversified Chemicals"),
+    ("CHOLAFIN.NS","Consumer Finance"),
+    ("BRITANNIA.NS","FMCG - Foods"),
+    ("BANKBARODA.NS","Public Banks"),
+    ("TECHM.NS","IT Services & Consulting"),
+    ("AMBUJACEM.NS","Cement"),
+    ("SHRIRAMFIN.NS","Consumer Finance"),
+    ("BAJAJHLDNG.NS","Asset Management"),
+    ("PNB.NS","Public Banks"),
+    ("PFC.NS","Specialized Finance"),
+    ("TATAPOWER.NS","Power Transmission & Distribution"),
+    ("MUTHOOTFIN.NS","Consumer Finance"),
+    ("SOLARINDS.NS","Commodity Chemicals"),
+    ("CIPLA.NS","Pharmaceuticals"),
+    ("TORNTPHARM.NS","Pharmaceuticals"),
+    ("CUMMINSIND.NS","Industrial Machinery"),
+    ("CANBK.NS","Public Banks"),
+    ("GAIL.NS","Gas Distribution"),
+    ("POLYCAB.NS","Electrical Components & Equipments"),
+    ("TATACONSUM.NS","Tea & Coffee"),
+    ("CGPOWER.NS","Heavy Electrical Equipments"),
+    ("INDIANB.NS","Public Banks"),
+    ("HDFCAMC.NS","Asset Management"),
+    ("MAXHEALTH.NS","Hospitals & Diagnostic Centres"),
+    ("SIEMENS.NS","Conglomerates"),
+    ("HEROMOTOCO.NS","Two Wheelers"),
+    ("BOSCHLTD.NS","Auto Parts"),
+    ("JINDALSTEL.NS","Iron & Steel"),
+    ("UNIONBANK.NS","Public Banks"),
+    ("INDHOTEL.NS","Hotels, Resorts & Cruise Lines"),
+    ("SHREECEM.NS","Cement"),
+    ("UBL.NS","Alcoholic Beverages"),
+    ("Mankind.NS","Pharmaceuticals")  # fallback entries; you can edit later
+]
+
+# ---------- Helpers --------------
+st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.title(APP_TITLE)
+st.write("RPStockInsight — live tickers, breakout suggestions, and simple predictions")
+
+# Create default tickers file on first run
+def ensure_tickers_file():
     try:
-        if len(tickers_list) == 0:
+        df = pd.read_csv(TICKERS_FILE)
+    except Exception:
+        df = pd.DataFrame(DEFAULT_TICKERS, columns=["symbol","sector"])
+        df.to_csv(TICKERS_FILE, index=False)
+    return df
+
+# Create default users file on first run
+def ensure_users_file():
+    try:
+        with open(USERS_FILE,'r') as f:
+            u = json.load(f)
+    except Exception:
+        with open(USERS_FILE,'w') as f:
+            json.dump(DEFAULT_USERS, f, indent=2)
+        u = DEFAULT_USERS.copy()
+    return u
+
+# Load tickers into dataframe
+tickers_df = ensure_tickers_file()
+users = ensure_users_file()
+
+# --------- caching yfinance fetch ------------
+@st.cache_data(ttl=CACHE_TTL)
+def fetch_prices(symbols, period="1mo", interval="1d"):
+    """Fetch price data for a list of symbols. Returns dict: symbol -> dataframe or None"""
+    out = {}
+    if not symbols:
+        return out
+    # yfinance.download can accept list but handle exceptions gracefully
+    try:
+        raw = yf.download(symbols, period=period, interval=interval, progress=False, threads=True)
+        # If only single ticker, raw is normal DataFrame
+        if isinstance(symbols, str) or (isinstance(symbols, list) and len(symbols)==1):
+            # ensure mapping
+            if isinstance(raw, pd.DataFrame):
+                out[symbols if isinstance(symbols,str) else symbols[0]] = raw.reset_index()
+            else:
+                out[symbols if isinstance(symbols,str) else symbols[0]] = None
             return out
-        if len(tickers_list) == 1:
-            t = tickers_list[0]
-            df = yf.download(t, period=period, interval=interval, progress=False, threads=True)
-            if df is None or df.empty:
-                out[t] = None
-            else:
-                df = df.reset_index()
-                out[t] = df
+        # multiple tickers -> multiindex columns likely
+        if raw is None or raw.empty:
+            # per-symbol fallback
+            for s in symbols:
+                try:
+                    df = yf.download(s, period=period, interval=interval, progress=False)
+                    out[s] = df.reset_index() if (df is not None and not df.empty) else None
+                except Exception:
+                    out[s] = None
+            return out
+        # if multiindex columns
+        if isinstance(raw.columns, pd.MultiIndex):
+            for s in symbols:
+                try:
+                    cols = raw.xs(s, axis=1, level=1, drop_level=False)
+                    # Build standardized dataframe
+                    df = pd.DataFrame({
+                        "Date": raw.index,
+                        "Open": raw[("Open", s)],
+                        "High": raw[("High", s)],
+                        "Low": raw[("Low", s)],
+                        "Close": raw[("Close", s)],
+                        "Adj Close": raw[("Adj Close", s)] if ("Adj Close", s) in raw.columns else raw[("Close", s)],
+                        "Volume": raw[("Volume", s)]
+                    }).reset_index(drop=True)
+                    out[s] = df
+                except Exception:
+                    out[s] = None
         else:
-            # batch download
-            batch_df = yf.download(tickers_list, period=period, interval=interval, progress=False, threads=True)
-            # If returns single-level columns (rare), handle
-            if isinstance(batch_df.columns, pd.MultiIndex):
-                # iterate tickers
-                for t in tickers_list:
-                    try:
-                        df_t = batch_df.xs(t, axis=1, level=1, drop_level=False)
-                        # xs could produce a multiindex; simplify
-                        df = pd.DataFrame({
-                            'Date': batch_df.index,
-                            'Open': batch_df[('Open', t)],
-                            'High': batch_df[('High', t)],
-                            'Low': batch_df[('Low', t)],
-                            'Close': batch_df[('Close', t)],
-                            'Adj Close': batch_df[('Adj Close', t)] if ('Adj Close', t) in batch_df.columns else batch_df[('Close', t)],
-                            'Volume': batch_df[('Volume', t)]
-                        }).reset_index(drop=True)
-                        out[t] = df
-                    except Exception:
-                        out[t] = None
-            else:
-                # single ticker fallback
-                for t in tickers_list:
-                    df = batch_df.copy()
+            # Not MultiIndex - try to map by symbol (may be single)
+            for s in symbols:
+                try:
+                    df = raw.copy()
                     df['Date'] = df.index
-                    out[t] = df.reset_index(drop=True)
+                    out[s] = df.reset_index(drop=True)
+                except Exception:
+                    out[s] = None
     except Exception as e:
-        # fallback: try per ticker fetch - slower but robust
-        for t in tickers:
+        # fallback to per-symbol download
+        for s in symbols:
             try:
-                df = yf.download(t, period=period, interval=interval, progress=False, threads=True)
-                if df is None or df.empty:
-                    out[t] = None
-                else:
-                    out[t] = df.reset_index()
+                df = yf.download(s, period=period, interval=interval, progress=False)
+                out[s] = df.reset_index() if (df is not None and not df.empty) else None
             except Exception:
-                out[t] = None
+                out[s] = None
     return out
 
-
-def compute_breakout_signals(df, lookback=20, volume_spike=1.5):
-    """
-    Simple breakout detector:
-    - breakout if last Close > rolling_max(lookback)
-    - and volume > avg_volume * volume_spike
-    Returns dict with breakout boolean and metrics
-    """
-    if df is None or df.empty or 'Close' not in df.columns:
-        return None
-    d = df.copy()
-    if 'Volume' not in d.columns:
-        d['Volume'] = 0
-    d['rolling_max'] = d['Close'].rolling(lookback).max()
-    d['rolling_min'] = d['Low'].rolling(lookback).min()
-    d['avg_vol'] = d['Volume'].rolling(lookback).mean()
-    latest = d.iloc[-1]
-    prev_max = d['rolling_max'].iloc[-2] if len(d) > 1 else np.nan
-    breakout = False
+# ---------- Analysis helpers ----------
+def compute_breakout(df, lookback=60, volume_mult=1.5):
+    """Return dict with breakout boolean and metrics"""
     try:
-        breakout = bool(latest['Close'] > prev_max and latest['Volume'] > (latest['avg_vol'] * volume_spike if not np.isnan(latest['avg_vol']) else 0))
-    except Exception:
+        if df is None or df.empty or 'Close' not in df.columns:
+            return None
+        d = df.copy().reset_index(drop=True)
+        if 'Volume' not in d.columns:
+            d['Volume'] = 0
+        d['rolling_high'] = d['Close'].rolling(lookback).max()
+        d['rolling_low'] = d['Low'].rolling(lookback).min()
+        d['avg_vol'] = d['Volume'].rolling(lookback).mean()
+        if len(d) < 2:
+            return None
+        last = d.iloc[-1]
+        prev_high = d['rolling_high'].iloc[-2] if len(d) > 1 else np.nan
+        try:
+            vol_ok = (last['Volume'] >= (last['avg_vol'] * volume_mult)) if not np.isnan(last['avg_vol']) else False
+        except Exception:
+            vol_ok = False
         breakout = False
-    # build suggestion
-    entry = float(latest['Close']) if not np.isnan(latest['Close']) else None
-    stop = float(d['rolling_min'].iloc[-1]) if not np.isnan(d['rolling_min'].iloc[-1]) else None
-    if entry is None or stop is None:
-        target = None
-    else:
-        # target using 1.5x reward:risk
-        rr = entry - stop
-        target = round(entry + 1.5 * rr, 2)
-    return {
-        "breakout": breakout,
-        "entry": entry,
-        "stop": stop,
-        "target": target,
-        "latest_date": latest['Date'] if 'Date' in latest.index else None,
-        "close": float(latest['Close']) if not np.isnan(latest['Close']) else None,
-        "volume": float(latest['Volume']) if not np.isnan(latest['Volume']) else None,
-        "avg_vol": float(latest['avg_vol']) if not np.isnan(latest['avg_vol']) else None
-    }
+        try:
+            breakout = (last['Close'] > prev_high) and vol_ok
+        except Exception:
+            breakout = False
+        entry = float(last['Close'])
+        stop = float(d['rolling_low'].iloc[-1]) if not np.isnan(d['rolling_low'].iloc[-1]) else None
+        rr = (entry - stop) if stop is not None else None
+        target = round(entry + 1.5 * rr, 2) if rr is not None else None
+        return {"breakout": breakout, "entry": entry, "stop": stop, "target": target, "close": entry, "volume": float(last['Volume']), "avg_vol": float(last['avg_vol']) if not np.isnan(last['avg_vol']) else None}
+    except Exception:
+        return None
 
-
-def simple_short_long_prediction(df):
-    """
-    Very simple prediction demonstration:
-    - Fit Linear Regression on last N closes and extrapolate
-    - Return predicted price for short-term (7 days) and long-term (30 days)
-    This is illustrative only. For production, use Prophet/ARIMA/etc.
-    """
+def simple_predict(df):
+    """Linear regression extrapolation - short (7) and long (30) days"""
     try:
         from sklearn.linear_model import LinearRegression
     except Exception:
-        return {"short": None, "long": None, "error": "sklearn not available"}
-
+        return {"short": None, "long": None, "error": "sklearn missing"}
     if df is None or df.empty or 'Close' not in df.columns:
         return {"short": None, "long": None, "error": "no data"}
-
-    d = df.reset_index(drop=True).copy()
-    # Use last 30 values if available
+    d = df.dropna(subset=['Close']).reset_index(drop=True)
     N = min(60, len(d))
+    if N < 5:
+        return {"short": None, "long": None, "error": "not enough data"}
     d = d.tail(N).reset_index(drop=True)
     d['t'] = np.arange(len(d))
     X = d[['t']].values
     y = d['Close'].values
-    if len(X) < 5:
-        return {"short": None, "long": None, "error": "not enough data"}
-    model = LinearRegression().fit(X, y)
+    m = LinearRegression().fit(X, y)
     last_t = X[-1, 0]
-    short_t = last_t + 7  # approx days
-    long_t = last_t + 30
-    pred_short = float(model.predict(np.array([[short_t]]))[0])
-    pred_long = float(model.predict(np.array([[long_t]]))[0])
-    return {"short": round(pred_short, 2), "long": round(pred_long, 2), "error": None}
+    pred_short = float(m.predict([[last_t + 7]])[0])
+    pred_long = float(m.predict([[last_t + 30]])[0])
+    return {"short": round(pred_short,2), "long": round(pred_long,2), "error": None}
 
-
-# ---------------------------
-# Simple local auth (file-backed)
-# ---------------------------
-# users.json is used to persist users locally. If not present, create with DEFAULT_USERS.
-USERS_FILE = "users.json"
-
-
-def load_users():
-    try:
-        with open(USERS_FILE, "r") as f:
-            users = json.load(f)
-    except FileNotFoundError:
-        users = DEFAULT_USERS.copy()
-        save_users(users)
-    except Exception:
-        users = DEFAULT_USERS.copy()
-    return users
-
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-
-
-def authenticate(username, password):
-    users = load_users()
-    if username in users and users[username]["password"] == password:
-        return users[username]["role"]
-    return None
-
-
-# ---------------------------
-# UI helpers
-# ---------------------------
-def pinned_ticker_html(nse_items, bse_items):
-    """
-    Build a compact HTML for the pinned top ticker area. We will show small font and two sections.
-    nse_items and bse_items are lists of (symbol, last_price, pct_change)
-    """
-    def row_html(items, label):
-        parts = []
-        for sym, price, pct in items:
-            arrow = "▲" if pct >= 0 else "▼"
-            parts.append(f"<span style='margin-right:12px;padding:4px 6px;display:inline-block'>{sym}: {price:.2f} {arrow} {pct:+.2f}%</span>")
-        return f"<div style='display:flex;align-items:center;overflow:auto;white-space:nowrap'><strong style='margin-right:8px'>{label}:</strong>" + "".join(parts) + "</div>"
-
-    html = f"""
-    <div style='width:100%;font-size:14px;'>
-      <div style='display:flex;gap:16px;flex-direction:column;'>
-        {row_html(nse_items,"NSE")}
-        {row_html(bse_items,"BSE")}
-      </div>
-    </div>
-    """
-    return html
-
-
-# ---------------------------
-# Streamlit layout
-# ---------------------------
-st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
-
-# Top header area
-st.markdown(f"# {APP_TITLE}")
-st.markdown("Mobile-friendly · Auto light/dark theme · Pinned live ticker (auto-refresh every 60s)")
-
-# Sidebar: settings, auth, inputs
+# ---------- UI: Sidebar ----------
 with st.sidebar:
-    st.header("Dashboard Settings")
-    symbol_input = st.text_input("Enter Stock Symbol (NSE/BSE) e.g. TCS.NS, INFY.NS", value="TCS.NS")
-    period = st.selectbox("Select Period", ["1mo", "3mo", "6mo", "1y"], index=1)
-    interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
-
-    st.markdown("---")
-    st.subheader("Admin area (local test/auth)")
-    users = load_users()
-    st.info("Note: This is local test auth. Change passwords in users.json for production.")
-    auth_mode = st.radio("Admin action", ["Login", "Register"], index=0)
+    st.header("Settings & Ticker Management")
+    # Auth area
+    st.subheader("Login / Register (local)")
+    auth_mode = st.selectbox("Action", ["Login", "Register"], index=0)
     if auth_mode == "Login":
-        username = st.text_input("Username", value="")
-        pwd = st.text_input("Password", type="password")
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
-            role = authenticate(username, pwd)
-            if role:
-                st.success(f"Logged in as {username} ({role})")
+            try:
+                with open(USERS_FILE,'r') as f:
+                    u = json.load(f)
+            except Exception:
+                u = DEFAULT_USERS.copy()
+            if username in u and u[username]["password"] == password:
+                st.success(f"Welcome {username} ({u[username]['role']})")
                 st.session_state["user"] = username
-                st.session_state["role"] = role
+                st.session_state["role"] = u[username]["role"]
             else:
                 st.error("Invalid credentials")
     else:
-        # Register: only accessible if current session user is superadmin or no superadmin exists
-        reg_user = st.text_input("New username", value="")
-        reg_pwd = st.text_input("New password", type="password")
-        reg_role = st.selectbox("Role for new user", ["user", "admin"])
-        if st.button("Register"):
-            # only allow registration if no users (first-time) or if logged in as superadmin
-            allow = False
-            if "role" not in st.session_state:
-                # permit initial registration to create admin
-                allow = True
-            else:
-                allow = st.session_state.get("role") == "superadmin"
+        st.info("Register (Only superadmin may register new users)")
+        r_user = st.text_input("New username", key="reg_user")
+        r_pass = st.text_input("New password", key="reg_pass", type="password")
+        r_role = st.selectbox("Role", ["user","admin"], key="reg_role")
+        if st.button("Register User"):
+            # Allow register if no users or current is superadmin
+            try:
+                with open(USERS_FILE,'r') as f:
+                    u = json.load(f)
+            except Exception:
+                u = DEFAULT_USERS.copy()
+            allow = ("role" in st.session_state and st.session_state.get("role")=="superadmin") or (len(u)==0)
             if not allow:
-                st.error("Only superadmin can register new users.")
+                st.error("Only superadmin may create users.")
             else:
-                u = load_users()
-                if reg_user in u:
-                    st.error("User exists")
-                else:
-                    u[reg_user] = {"password": reg_pwd, "role": reg_role}
-                    save_users(u)
-                    st.success(f"Created user {reg_user} ({reg_role})")
+                u[r_user] = {"password": r_pass, "role": r_role}
+                with open(USERS_FILE,'w') as f:
+                    json.dump(u,f,indent=2)
+                st.success("User created")
 
-
-st.markdown("---")
-
-# Build tickers to show at top: use sample list + optional CSV upload
-col_top1, col_top2 = st.columns([5, 1])
-with col_top1:
-    st.markdown("### Live Tickers (small)")
-    uploaded = st.file_uploader("Upload CSV of tickers (column 'SYMBOL') to monitor many symbols (optional)", type=["csv"])
-    if uploaded:
-        try:
-            df_symbols = pd.read_csv(uploaded)
-            if 'SYMBOL' in df_symbols.columns:
-                watch_list = df_symbols['SYMBOL'].dropna().astype(str).unique().tolist()
-            else:
-                # assume first column has tickers
-                watch_list = df_symbols.iloc[:,0].dropna().astype(str).unique().tolist()
-        except Exception:
-            st.error("Error reading CSV — make sure it has a SYMBOL column or one column with tickers")
-            watch_list = DEFAULT_SAMPLE_TICKERS
-    else:
-        watch_list = DEFAULT_SAMPLE_TICKERS
-
-# ensure small lists first for live top area to keep it fast
-top_nse = [t for t in watch_list if t.endswith(".NS")]
-top_bse = [t for t in watch_list if t.endswith(".BO") or t.endswith(".BSE") or t.endswith(".BO.NS") or t.endswith(".BSE.NS")]
-# fallback: treat unknown as NSE sample
-if not top_nse and watch_list:
-    top_nse = watch_list[:6]
-if not top_bse:
-    top_bse = []
-
-# fetch only latest price for top tickers
-live_dict = fetch_ticker_data(top_nse + top_bse, period="5d", interval="1d")
-nse_items = []
-bse_items = []
-for t in top_nse:
-    df_t = live_dict.get(t)
-    if df_t is None or df_t.empty or 'Close' not in df_t.columns:
-        continue
-    last = df_t.iloc[-1]
-    prev = df_t['Close'].iloc[-2] if len(df_t) > 1 else last['Close']
-    price = float(last['Close'])
-    pct = ((price - prev) / prev * 100) if prev != 0 else 0.0
-    nse_items.append((t, price, pct))
-for t in top_bse:
-    df_t = live_dict.get(t)
-    if df_t is None or df_t.empty or 'Close' not in df_t.columns:
-        continue
-    last = df_t.iloc[-1]
-    prev = df_t['Close'].iloc[-2] if len(df_t) > 1 else last['Close']
-    price = float(last['Close'])
-    pct = ((price - prev) / prev * 100) if prev != 0 else 0.0
-    bse_items.append((t, price, pct))
-
-with col_top1:
-    html = pinned_ticker_html(nse_items[:12], bse_items[:12])  # show only up to 12 each to keep it readable
-    st.markdown(html, unsafe_allow_html=True)
-
-with col_top2:
-    st.write("")  # spacer
-    st.caption(f"Auto-refresh: every {TICKER_REFRESH_SECONDS}s (cache TTL)")
-
-st.markdown("---")
-
-# Main controls & stock summary
-st.subheader(f"Stock Summary for {symbol_input}")
-# fetch main symbol data
-data_dict = fetch_ticker_data([symbol_input], period=period, interval=interval)
-main_df = data_dict.get(symbol_input)
-
-if main_df is None or main_df.empty:
-    st.warning("⚠️ No data found. Please check the stock symbol or try another.")
-else:
-    # show quick stats
+    st.markdown("---")
+    st.subheader("Manage Tickers (add/remove)")
+    # load tickers from file
     try:
-        avg_close = main_df['Close'].mean()
-        high_close = main_df['Close'].max()
-        low_close = main_df['Close'].min()
-        colA, colB, colC, colD = st.columns(4)
-        colA.metric("Average Close", f"{avg_close:.2f}")
-        colB.metric("Highest Close", f"{high_close:.2f}")
-        colC.metric("Lowest Close", f"{low_close:.2f}")
-        colD.metric("Period", period)
+        tickers_df = pd.read_csv(TICKERS_FILE)
     except Exception:
-        st.write("Could not compute metrics (missing columns).")
+        tickers_df = pd.DataFrame(DEFAULT_TICKERS, columns=["symbol","sector"])
+        tickers_df.to_csv(TICKERS_FILE,index=False)
+    st.write(f"Tickers loaded: {len(tickers_df)}")
+    new_symbol = st.text_input("Add ticker symbol (e.g. TCS.NS)", key="add_sym")
+    new_sector = st.text_input("Sector for new symbol", key="add_sector")
+    if st.button("Add ticker"):
+        if new_symbol:
+            tickers_df = pd.concat([tickers_df, pd.DataFrame([[new_symbol.strip(), new_sector.strip() if new_sector else "Other"]], columns=["symbol","sector"])], ignore_index=True)
+            tickers_df.to_csv(TICKERS_FILE,index=False)
+            st.success(f"Added {new_symbol.strip()}")
+    # remove
+    rem_symbol = st.text_input("Remove ticker symbol (exact)", key="rem_sym")
+    if st.button("Remove ticker"):
+        before = len(tickers_df)
+        tickers_df = tickers_df[ tickers_df['symbol'].str.upper() != rem_symbol.strip().upper() ]
+        tickers_df.to_csv(TICKERS_FILE,index=False)
+        st.success(f"Removed {rem_symbol.strip()}. {before - len(tickers_df)} removed.")
+    if st.button("Reset to defaults"):
+        pd.DataFrame(DEFAULT_TICKERS, columns=["symbol","sector"]).to_csv(TICKERS_FILE,index=False)
+        st.success("Reset tickers to defaults")
+    st.markdown("---")
+    st.subheader("Quick controls")
+    period = st.selectbox("Price period", ["1mo","3mo","6mo","1y"], index=1)
+    interval = st.selectbox("Interval", ["1d","1wk"], index=0)
+    st.write("Auto-refresh interval (cache TTL): 60s (fixed)")
 
-    st.markdown("### Recent Data")
-    st.dataframe(main_df.tail(10).reset_index(drop=True))
+# ---------- Top pinned tickers ----------
+# load tickers & group by sector
+tickers_df = pd.read_csv(TICKERS_FILE)
+# show pinned top NSE + BSE (we'll show small font, auto-scroll)
+def build_pinned_html(rows, label):
+    parts=[]
+    for r in rows:
+        sym=r['symbol']
+        price=r.get('price',0.0)
+        pct=r.get('pct',0.0)
+        arrow = "▲" if pct>=0 else "▼"
+        parts.append(f"<span style='margin-right:14px;padding:3px 6px;display:inline-block'>{sym} {price:.2f} {arrow} {pct:+.2f}%</span>")
+    return f"<div style='white-space:nowrap;overflow:auto;font-size:13px'><strong style='margin-right:10px'>{label}:</strong>" + " ".join(parts) + "</div>"
 
-    # Predictions (simple)
-    preds = simple_short_long_prediction(main_df)
-    st.markdown("### 🔮 Short-term & long-term predictions")
-    if preds.get("error"):
-        st.warning("Prediction not available: " + str(preds.get("error")))
-    else:
-        st.info(f"Predicted price in ~7 days ≈ ₹{preds['short']}  •  in ~30 days ≈ ₹{preds['long']}")
-
-    # Breakout detection for current symbol
-    st.markdown("### 🚀 Breakout Detection")
-    try:
-        sig = compute_breakout_signals(main_df, lookback=20, volume_spike=1.5)
-        if sig is None:
-            st.warning("No breakout data (insufficient data).")
+# fetch live price for top few (to avoid too slow UI, we show up to 30 in pinned area)
+pinned_symbols = tickers_df['symbol'].tolist()[:40]
+price_map = {}
+if pinned_symbols:
+    fetched = fetch_prices(pinned_symbols, period="5d", interval="1d")
+    for s in pinned_symbols:
+        df = fetched.get(s)
+        if df is None or df.empty or 'Close' not in df.columns:
+            price_map[s] = {"price":0.0,"pct":0.0}
         else:
-            if sig['breakout']:
-                st.success("Breakout detected ✅")
-                st.write(f"Entry (current close): ₹{sig['entry']}")
-                st.write(f"Stop loss (rolling low): ₹{sig['stop']}")
-                st.write(f"Target (1.5x R:R): ₹{sig['target']}")
-                st.write(f"Volume: {int(sig['volume'])}  •  Avg vol: {int(sig['avg_vol']) if sig['avg_vol'] is not None else 'N/A'}")
-                st.caption("Suggested timeframe: Short-term (7-21 days). This is NOT financial advice.")
-            else:
-                st.info("No breakout detected (by our simple rule).")
-    except Exception as e:
-        st.error("Error analyzing breakout: " + str(e))
+            last = df.iloc[-1]
+            prev = df['Close'].iloc[-2] if len(df)>1 else last['Close']
+            price = float(last['Close'])
+            pct = ((price - prev)/prev*100) if prev!=0 else 0.0
+            price_map[s] = {"price":price,"pct":pct}
+# build NSE and BSE lines (we'll show same symbols as NSE but user can map to .BO later if desired)
+nse_rows = []
+bse_rows = []
+for s in pinned_symbols:
+    p = price_map.get(s,{"price":0.0,"pct":0.0})
+    nse_rows.append({"symbol":s, "price":p['price'], "pct":p['pct']})
+    # naive BSE mapping: replace .NS with .BO
+    b_sym = s.replace(".NS",".BO")
+    bse_rows.append({"symbol":b_sym, "price":p['price'], "pct":p['pct']})
 
-# Multi-ticker section: fetch watch list and compute breakout candidates
+col1, col2 = st.columns([8,1])
+with col1:
+    st.markdown(build_pinned_html(nse_rows, "NSE"), unsafe_allow_html=True)
+    st.markdown(build_pinned_html(bse_rows, "BSE"), unsafe_allow_html=True)
+with col2:
+    st.caption(f"Refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
 st.markdown("---")
-st.subheader("🔎 Watchlist & Breakout Suggestions")
 
-# If user uploaded a big list, allow them to control sample size (for demo speed)
-if uploaded:
-    total_watch = len(watch_list)
-    st.caption(f"Uploaded {total_watch} tickers. We'll fetch in a batch; for big lists this may take longer.")
-    if total_watch > 50:
-        sample_count = st.number_input("Limit to first N items to analyze (for faster results)", min_value=10, max_value=total_watch, value=min(50, total_watch))
-        analysis_list = watch_list[:int(sample_count)]
-    else:
-        analysis_list = watch_list
+# ---------- Main: Watchlist analysis & Breakouts by sector ----------
+st.header("Breakout Suggestions (by sector)")
+# group tickers by sector
+sectors = tickers_df['sector'].fillna("Other").unique().tolist()
+col_left, col_right = st.columns([3,2])
+with col_left:
+    st.write("Select sector to analyze:")
+    sel_sector = st.selectbox("Sector", ["All"] + sorted(sectors))
+    max_per_sector = st.slider("Top N per sector (suggestions)", min_value=3, max_value=15, value=7)
+
+# Build analysis list
+if sel_sector == "All":
+    analysis_symbols = tickers_df['symbol'].tolist()
 else:
-    analysis_list = watch_list
+    analysis_symbols = tickers_df[tickers_df['sector']==sel_sector]['symbol'].tolist()
 
-if st.button("Analyze Watchlist (breakouts & predictions)"):
+if st.button("Analyze watchlist for breakouts"):
     with st.spinner("Fetching data and analyzing..."):
-        dict_all = fetch_ticker_data(analysis_list, period="3mo", interval="1d")
-        breakout_rows = []
-        suggestion_count = 0
-        for t in analysis_list:
-            df_t = dict_all.get(t)
-            if df_t is None or df_t.empty:
+        fetched = fetch_prices(analysis_symbols, period="3mo", interval="1d")
+        # collect breakout candidates per sector
+        rows_all = []
+        for idx, row in tickers_df.iterrows():
+            s = row['symbol']
+            if s not in fetched:
                 continue
-            sig = compute_breakout_signals(df_t, lookback=20, volume_spike=1.5)
-            preds = simple_short_long_prediction(df_t)
-            if sig and sig.get("breakout"):
-                suggestion_count += 1
-                breakout_rows.append({
-                    "Ticker": t,
-                    "Entry": sig["entry"],
-                    "Stop": sig["stop"],
-                    "Target": sig["target"],
-                    "ShortPred": preds.get("short"),
-                    "LongPred": preds.get("long"),
-                    "Volume": sig.get("volume"),
-                    "AvgVol": sig.get("avg_vol")
+            df = fetched.get(s)
+            if df is None or df.empty:
+                continue
+            br = compute_breakout(df, lookback=60, volume_mult=1.5)
+            preds = simple_predict(df)
+            if br and br.get("breakout"):
+                rows_all.append({
+                    "symbol": s,
+                    "sector": row['sector'],
+                    "entry": br.get("entry"),
+                    "stop": br.get("stop"),
+                    "target": br.get("target"),
+                    "volume": br.get("volume"),
+                    "avg_vol": br.get("avg_vol"),
+                    "pred_short": preds.get("short"),
+                    "pred_long": preds.get("long")
                 })
-        if suggestion_count == 0:
-            st.info("No breakout candidates found in the requested list (by the simple rule).")
+        if not rows_all:
+            st.info("No breakout candidates detected by simple rules.")
         else:
-            st.success(f"Found {suggestion_count} breakout candidates.")
-            df_b = pd.DataFrame(breakout_rows)
-            st.dataframe(df_b)
+            df_out = pd.DataFrame(rows_all)
+            # group by sector and show top N by volume
+            grouped = df_out.groupby("sector")
+            for sector_name, grp in grouped:
+                st.subheader(f"{sector_name} — Top {max_per_sector}")
+                # rank by volume desc
+                topn = grp.sort_values("volume", ascending=False).head(max_per_sector)
+                st.dataframe(topn.reset_index(drop=True))
+            # Download
+            csv = df_out.to_csv(index=False).encode('utf-8')
+            st.download_button("Download all breakout suggestions", data=csv, file_name="breakout_suggestions.csv", mime="text/csv")
 
-            # provide CSV download
-            csv = df_b.to_csv(index=False).encode('utf-8')
-            st.download_button("Download suggestions CSV", data=csv, file_name="breakout_suggestions.csv", mime="text/csv")
-
-# Footer and admin info
+# Quick search single symbol
 st.markdown("---")
-st.caption("© 2025 RPStockInsight · Built with ❤️ using Streamlit")
-st.caption(f"Updated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.subheader("Quick Symbol Lookup")
+sym_q = st.text_input("Symbol (e.g. TCS.NS)", "")
+if st.button("Fetch symbol") and sym_q:
+    with st.spinner("Fetching..."):
+        fetched = fetch_prices([sym_q], period="6mo", interval="1d")
+        df = fetched.get(sym_q)
+        if df is None or df.empty:
+            st.warning("No data found for symbol.")
+        else:
+            st.dataframe(df.tail(10))
+            br = compute_breakout(df, lookback=60)
+            preds = simple_predict(df)
+            st.write("Prediction:", preds)
+            st.write("Breakout:", br)
 
-# Quick instructions and next steps for you (not displayed to public users normally)
-if "role" in st.session_state and st.session_state.get("role") == "superadmin":
-    st.info("Superadmin tools: You can edit users.json directly in your repo, or use Register to add users.")
-    st.write("For production: move credentials to Streamlit secrets (Manage app → Settings → Secrets) and remove plaintext credentials from users.json")
+# Footer & admin notes
+st.markdown("---")
+st.caption("© RPStockInsight — Test mode. Not financial advice.")
+if "role" in st.session_state and st.session_state.get("role")=="superadmin":
+    st.info("You are superadmin. You can edit tickers and users.json directly in the workspace.")
+
